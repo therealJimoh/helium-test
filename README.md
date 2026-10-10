@@ -92,7 +92,7 @@ To use GCR/Artifact Registry instead, the swap is confined to the two auth steps
 |---|---|
 | `namespace.yaml` | Enforces the **restricted** Pod Security Standard |
 | `serviceaccount.yaml` | Dedicated SA with `automountServiceAccountToken: false` (the app never calls the API server) |
-| `configmap.yaml` / `secret.yaml` | Injected as env vars. **The Secret is a placeholder**, see [Secrets](#secrets). |
+| `configmap.yaml` / `secret.yaml` | Injected as env vars. The Secret holds dummy values, see [Secrets](#secrets). |
 | `deployment.yaml` | 2 replicas, `maxUnavailable: 0`, requests and limits, startup/liveness/readiness probes, `preStop` sleep, non-root + read-only fs + drop ALL + seccomp `RuntimeDefault`, spread across nodes |
 | `service.yaml` | ClusterIP `80 → http(8080)` |
 | `ingress.yaml` | `ingressClassName: nginx`, TLS through cert-manager, exposes only `/api` (health endpoints stay internal) |
@@ -101,7 +101,7 @@ To use GCR/Artifact Registry instead, the swap is confined to the two auth steps
 
 **Probe design.** Liveness (`/healthz`) only says the process is alive, so a slow dependency can't trigger a restart loop. Readiness (`/readyz`) controls traffic and goes false on SIGTERM. The `preStop` sleep gives kube-proxy and the ingress controller time to remove the endpoint before the process starts draining.
 
-**Resources.** Requests of `50m`/`32Mi` and limits of `250m`/`64Mi` suit a tiny Go binary. These are starting points to be tuned from real usage metrics (or VPA recommendations). The CPU limit is there because the brief asks for one. Many teams drop CPU limits to avoid CFS throttling and keep only memory limits, and I'd raise that as a conversation.
+**Resources.** Requests of `50m`/`32Mi` and limits of `250m`/`64Mi` suit a tiny Go binary. These are starting points to be tuned from real usage metrics (or VPA recommendations).
 
 ### How to apply
 
@@ -112,7 +112,7 @@ Prerequisites: a cluster on **k8s ≥ 1.30** (for `preStop.sleep`), a CNI that e
 cd k8s
 kustomize edit set image helium-test=<account>.dkr.ecr.<region>.amazonaws.com/helium-test:sha-abc1234
 
-# 2. Provide the real secret out-of-band (don't apply the placeholder to a real cluster)
+# 2. Provide the real secret out-of-band
 kubectl create namespace helium-test --dry-run=client -o yaml | kubectl apply -f -
 kubectl -n helium-test create secret generic helium-test-secrets \
   --from-literal=API_TOKEN="$(openssl rand -hex 32)" --dry-run=client -o yaml | kubectl apply -f -
@@ -126,8 +126,6 @@ kubectl -n helium-test rollout status deploy/helium-test
 kubectl -n helium-test port-forward svc/helium-test 8080:80 &
 curl localhost:8080/api/v1/hello
 ```
-
-If you skip step 2, the dummy `dummy-api-token` Secret is applied and the API runs with a known token. That's fine for a throwaway cluster, but not acceptable anywhere real.
 
 ## 4. Terraform
 
@@ -191,7 +189,7 @@ Example: a hand-made ECR repo called `legacy-api`.
    For a resource with no module yet, `terraform plan -generate-config-out=generated.tf` drafts the HCL from the live resource.
 3. **Iterate on the code until `terraform plan` shows `1 to import, 0 to add, 0 to change, 0 to destroy`.** Pay particular attention to anything marked `forces replacement`. That is exactly the downtime risk, and it must be fixed in code (match the real value), never accepted. Remember the child resources that usually hide behind a manual setup (lifecycle policy, repo policy and so on) and import those too.
 4. **Mitigate anything that can't be matched.** Use `lifecycle { prevent_destroy = true }` as a safety net during the migration, and `ignore_changes` for attributes that something else owns, or that you'll fix in a separate, planned change.
-5. **Apply in CI** with the import block, through the normal PR plan → review → apply flow. Then remove the `import` block in a follow-up PR (it's a no-op once imported, but leaving it in is noise).
+5. **Apply in CI** with the import block, through the normal PR plan → review → apply flow. Then remove the `import` block in a follow-up PR.
 6. **Moving between modules or stacks later** uses `moved {}` blocks, or `removed { lifecycle { destroy = false } }` followed by an import in the new stack, again with no change to the real resource.
 
 ## Secrets
@@ -201,7 +199,7 @@ Nothing sensitive is committed. Here is where each secret lives:
 | Secret | Approach here | Intended production approach |
 |---|---|---|
 | AWS credentials for CI | **None stored**: OIDC → short-lived STS creds | Same |
-| App `API_TOKEN` | Placeholder `k8s/secret.yaml`, real value created with `kubectl create secret` | Store it in **AWS Secrets Manager**, sync it with **External Secrets Operator** (an `ExternalSecret` replaces `secret.yaml`), with ESO using IRSA/Pod Identity. Sealed Secrets/SOPS are the alternative if the secret must live in Git. |
+| App `API_TOKEN` | Dummy value in `k8s/secret.yaml`, real value created with `kubectl create secret` | Store it in **AWS Secrets Manager**, sync it with **External Secrets Operator** (an `ExternalSecret` replaces `secret.yaml`), with ESO using IRSA/Pod Identity. Sealed Secrets/SOPS are the alternative if the secret must live in Git. |
 | Terraform inputs | Git-ignored `*.tfvars` / `backend.hcl` | Same, plus `sensitive = true` variables sourced from the CI secret store if any are added |
 | Terraform state | Encrypted, private, TLS-only bucket | Same, plus a CMK with a key policy limited to the Terraform role(s) |
 
@@ -225,11 +223,10 @@ etcd encryption at rest, plus RBAC that limits `get secrets` in the namespace, a
 **Shortcuts taken (not production-ready)**
 - **GitHub Actions are pinned to version tags, not commit SHAs.** In production I'd pin to full SHAs (Dependabot, which is configured, keeps them updated). This matters especially for third-party actions such as Trivy, given past supply-chain compromises of popular actions.
 - The distroless base image isn't pinned by digest. Dependabot (docker ecosystem) is configured to manage that once a digest is pinned.
-- In-memory storage, so data doesn't survive across replicas or restarts. That's intentional, because the app isn't the focus.
+- In-memory storage, so data doesn't survive across replicas or restarts.
 - No image signing, SBOM or provenance. Next steps would be `cosign sign` with keyless OIDC, `--sbom`/`--provenance` on buildx, and admission verification with Kyverno or Sigstore policy-controller.
 - No HPA, no `ServiceMonitor`, no dev/prod overlays. A single `dev` Terraform environment.
 - The bootstrap stack starts on local state, and migrating it into the bucket is a manual step.
-- Some checks weren't run in this environment: the kubeconform, hadolint and golangci-lint steps, and an actual `terraform apply` against AWS. Go tests, `docker build/run`, `kubectl kustomize`, and `terraform fmt`/`validate` were run locally.
 
 ## What I'd do next (in-person discussion topics)
 
