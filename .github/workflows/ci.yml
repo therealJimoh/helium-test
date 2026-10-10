@@ -111,7 +111,7 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: Trivy scan (report)
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: ${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.sha_tag }}
           format: sarif
@@ -126,7 +126,7 @@ jobs:
 
       # Gate: fail the build on fixable HIGH/CRITICAL findings before anything is pushed.
       - name: Trivy scan (gate)
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: ${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.sha_tag }}
           format: table
