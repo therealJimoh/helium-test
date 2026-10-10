@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: helium-test-config
+data:
+  PORT: "8080"
+  APP_GREETING: "hello from helium test"

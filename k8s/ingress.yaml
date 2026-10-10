@@ -1,0 +1,24 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: helium-test
+  annotations:
+    # Assumes cert-manager with a ClusterIssuer named letsencrypt.
+    cert-manager.io/cluster-issuer: letsencrypt
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - helium-test.example.com
+      secretName: helium-test-tls
+  rules:
+    - host: helium-test.example.com
+      http:
+        paths:
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: helium-test
+                port:
+                  name: http
