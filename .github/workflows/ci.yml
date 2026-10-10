@@ -65,7 +65,7 @@ jobs:
           curl -sSL https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz | tar xz kubeconform
           kubectl kustomize k8s | ./kubeconform -strict -summary -
 
-      - uses: hashicorp/setup-terraform@v3
+      - uses: hashicorp/setup-terraform@v4
         with:
           terraform_version: 1.12.2
 
